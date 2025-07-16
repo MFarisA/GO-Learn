@@ -97,3 +97,7 @@ func (handler *AuthHandler) Login(writer http.ResponseWriter, request *http.Requ
 	writer.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(writer).Encode(AuthResponse{Token: tokenString})
 }
+
+func (handler *AuthHandler) Logout(writer http.ResponseWriter, request *http.Request){
+	
+}
