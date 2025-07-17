@@ -1,64 +1,149 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
-	"example.com/go-rest/models" 
 	"net/http"
 	"strconv"
-	"strings"
+	"time"
+
+	"example.com/go-rest/models"
+	"github.com/go-chi/chi/v5"
+	"gorm.io/gorm"
 )
 
 type NoteHandler struct {
-	DB *sql.DB
+	DB *gorm.DB
 }
 
-type NoteRequest struct{
-
+func NewNoteHandler(db *gorm.DB) *NoteHandler {
+	return &NoteHandler{DB: db}
 }
 
-func (handler *NoteHandler) CreateNote(writer http.ResponseWriter, request *http.Request){
-	title := request.FormValue("title")
-	content := request.FormValue("content")
+func (handler *NoteHandler) CreateNote(writer http.ResponseWriter, request *http.Request) {
+	var NewNote models.Note
 
-	if title == "" || content == "" {
+	err := json.NewDecoder(request.Body).Decode(&NewNote)
+	if err != nil {
+		http.Error(writer, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if NewNote.Title == "" || NewNote.Content == "" {
 		http.Error(writer, "Title and content must not be empty", http.StatusBadRequest)
 		return
 	}
 
-	result, err := handler.DB.Exec("INSERT INTO notes (title, content) VALUES (?, ?)", title, content)
-	if err != nil {
-		http.Error(writer, "Failed to create note", http.StatusInternalServerError)
-		return
-	}
+	NewNote.CreatedAt = time.Now()
+	NewNote.UpdatedAt = time.Now()
 
-	id, _ := result.LastInsertId()
-
-	var newNote models.Note
-	err = handler.DB.QueryRow("SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ?", id).Scan(
-		&newNote.ID, &newNote.Title, &newNote.Content, &newNote.CreatedAt, &newNote.UpdatedAt,
-	)
-	if err != nil {
-		http.Error(writer, "Failed to retrieve newly created note", http.StatusInternalServerError)
+	if result := handler.DB.Create(&NewNote); result.Error != nil {
+		http.Error(writer, "Failed to create note"+result.Error.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusCreated)
-	json.NewEncoder(writer).Encode(newNote)	
+	json.NewEncoder(writer).Encode(NewNote)
 }
 
-func (handler *NoteHandler) getNotes(writer http.ResponseWriter, request *http.Request){
-	rows, err :=  handler.DB.Query("SELECT id, title, content, created_at, updated_at FROM notes")
+func (handler *NoteHandler) GetNotes(writer http.ResponseWriter, request *http.Request) {
+	var note []models.Note
 
-	if err != nil {
-		http.Error(writer, "Failed to show Notes", http.StatusInternalServerError)
+	if result := handler.DB.Find(&note); result.Error != nil {
+		http.Error(writer, "Failed to fetch notes"+result.Error.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	defer rows.Close()
-	note := []models.Note{}
+	writer.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(writer).Encode(note)
 }
 
+func (handler *NoteHandler) ShowNotesByID(writer http.ResponseWriter, request *http.Request) {
+	IdParam := chi.URLParam(request, "id")
+	id, err := strconv.Atoi(IdParam)
 
+	if err != nil {
+		http.Error(writer, "Invalid note ID", http.StatusBadRequest)
+		return
+	}
 
+	var Note models.Note
+
+	if result := handler.DB.First(&Note, id); result.Error != nil {
+		http.Error(writer, "Failed to fetch note"+result.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writer.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(writer).Encode(Note)
+}
+
+func (handler *NoteHandler) UpdateNotes(writer http.ResponseWriter, request *http.Request) {
+	IdParam := chi.URLParam(request, "id")
+	id, err := strconv.Atoi(IdParam)
+
+	if err != nil {
+		http.Error(writer, "Invalid note ID", http.StatusBadRequest)
+		return
+	}
+
+	var updateNote models.Note
+
+	err = json.NewDecoder(request.Body).Decode(&updateNote)
+	if err != nil {
+		http.Error(writer, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if updateNote.Title == "" || updateNote.Content == "" {
+		http.Error(writer, "Title and content must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	var existingNote models.Note
+	if result := handler.DB.First(&existingNote, id); result.Error != nil {
+		http.Error(writer, "Failed to find note: "+result.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	existingNote.Title = updateNote.Title
+	existingNote.Content = updateNote.Content
+	existingNote.UpdatedAt = existingNote.UpdatedAt
+
+	if result := handler.DB.Save(&existingNote); result.Error != nil {
+		http.Error(writer, "Failed to update note: "+result.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	json.NewEncoder(writer).Encode(existingNote)
+}
+
+func (handler *NoteHandler) DeleteNotes(writer http.ResponseWriter, request *http.Request) {
+	IdParam := chi.URLParam(request, "id")
+	id, err := strconv.Atoi(IdParam)
+
+	if err != nil {
+		http.Error(writer, "Invalid note ID", http.StatusBadRequest)
+		return
+	}
+
+	result := handler.DB.Delete(&models.Note{}, id)
+	if result.Error != nil {
+		http.Error(writer, "Failed to delete note: "+result.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if result.RowsAffected == 0 {
+		http.NotFound(writer, request)
+		return
+	}
+
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	responseMessage := map[string]string{
+		"message": "Note deleted successfully",
+	}
+	json.NewEncoder(writer).Encode(responseMessage)
+}
